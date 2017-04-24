@@ -758,6 +758,49 @@ debug_test()
     start_iceccd localice --no-remote -m 2
 }
 
+zero_local_jobs_test()
+{
+    echo Running zero_local_jobs test.
+    reset_logs local "Running zero_local_jobs test"
+    reset_logs remote  "Running zero_local_jobs test"
+
+    start_ice "local-no-compile"
+
+    libdir="${testdir}/libs"
+    rm -rf  "${libdir}"
+    mkdir "${libdir}"
+
+    reset_logs remote $GXX -Wall -Werror -c testfunc.cpp -o "${testdir}/testfunc.o"
+    echo Running: $GXX -Wall -Werror -c testfunc.cpp -o "${testdir}/testfunc.o"
+    ICECC_TEST_SOCKET="$testdir"/socket-localice ICECC_TEST_REMOTEBUILD=1 ICECC_PREFERRED_HOST=remoteice1 ICECC_DEBUG=debug ICECC_LOGFILE="$testdir"/icecc.log $valgrind "$prefix"/bin/icecc $GXX -Wall -Werror -c testfunc.cpp -o "${testdir}/testfunc.o" 2>"$testdir"/stderr.localice
+
+    reset_logs remote $GXX -Wall -Werror -c testmainfunc.cpp -o "${testdir}/testmainfunc.o"
+    echo Running: $GXX -Wall -Werror -c testmainfunc.cpp -o "${testdir}/testmainfunc.o"
+    ICECC_TEST_SOCKET="$testdir"/socket-localice ICECC_TEST_REMOTEBUILD=1 ICECC_PREFERRED_HOST=remoteice2 ICECC_DEBUG=debug ICECC_LOGFILE="$testdir"/icecc.log $valgrind "$prefix"/bin/icecc $GXX -Wall -Werror -c testmainfunc.cpp -o "${testdir}/testmainfunc.o" 2>"$testdir"/stderr.localice
+
+    ar rcs "${libdir}/libtestlib1.a" "${testdir}/testmainfunc.o"
+    ar rcs "${libdir}/libtestlib2.a" "${testdir}/testfunc.o"
+
+    reset_logs local $GXX -Wall -Werror "-L${libdir}" "-ltestlib1" "-ltestlib2" -o "${testdir}/linkedapp"
+    echo Running: $GXX -Wall -Werror "-L${libdir}" "-ltestlib1" "-ltestlib2" -o "${testdir}/linkedapp"
+    ICECC_TEST_SOCKET="$testdir"/socket-localice ICECC_TEST_REMOTEBUILD=1 ICECC_PREFERRED_HOST=localice ICECC_DEBUG=debug ICECC_LOGFILE="$testdir"/icecc.log $valgrind "$prefix"/bin/icecc $GXX -Wall -Werror "-L${libdir}" "-ltestlib1" "-ltestlib2" -o "${testdir}/linkedapp" 2>"$testdir"/stderr.remoteice
+
+    "${testdir}/linkedapp" 2>>"$testdir"/stderr.log
+    app_ret=$?
+    if test ${app_ret} -ne 123; then
+        echo "Error, failed to create a test app by building remotely and linking locally"
+        stop_ice 0
+        exit 2
+    fi
+    rm -rf  "${libdir}"
+
+    stop_ice 1
+    check_logs_for_generic_errors
+
+    echo zero_local_jobs test successful.
+    echo
+}
+
 reset_logs()
 {
     type="$1"
@@ -989,6 +1032,8 @@ fi
 reset_logs local "Closing down"
 stop_ice 1
 check_logs_for_generic_errors
+
+zero_local_jobs_test
 
 reset_logs local "Starting only daemon"
 start_only_daemon
