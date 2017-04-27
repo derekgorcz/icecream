@@ -97,6 +97,7 @@ abort_tests()
 start_iceccd()
 {
     name=$1
+    shift
     ICECC_TEST_SOCKET="$testdir"/socket-${name} $valgrind "${iceccd}" 6 -s localhost:8767 -b "$testdir"/envs-${name} -l "$testdir"/${name}.log -N ${name}  -v -v -v "$@" &
     pid=$!
     eval ${name}_pid=${pid}
@@ -760,11 +761,25 @@ debug_test()
 
 zero_local_jobs_test()
 {
+    # The ${iceccd} daemon does not seem to work for this test.
+    # This may be related to the same issue seen in the debug_test()
+
     echo Running zero_local_jobs test.
+
     reset_logs local "Running zero_local_jobs test"
     reset_logs remote  "Running zero_local_jobs test"
 
-    start_ice "local-no-compile"
+    stop_ice 1
+
+    ICECC_TEST_SOCKET="$testdir"/socket-localice $valgrind "${prefix}/sbin/iceccd" --no-remote -s localhost:8767 -b "$testdir"/envs-localice -l "$testdir"/localice.log -N localice -m 0 -v -v -v &
+    localice_pid=$!
+    echo $localice_pid > "$testdir"/localice.pid
+    ICECC_TEST_SOCKET="$testdir"/socket-remoteice1 $valgrind "${prefix}/sbin/iceccd" -p 10246 -s localhost:8767 -b "$testdir"/envs-remoteice1 -l "$testdir"/remoteice1.log -N remoteice1 -m 2 -v -v -v &
+    remoteice1_pid=$!
+    echo $remoteice1_pid > "$testdir"/remoteice1.pid
+    ICECC_TEST_SOCKET="$testdir"/socket-remoteice2 $valgrind "${prefix}/sbin/iceccd" -p 10247 -s localhost:8767 -b "$testdir"/envs-remoteice2 -l "$testdir"/remoteice2.log -N remoteice2 -m 2 -v -v -v &
+    remoteice2_pid=$!
+    echo $remoteice2_pid > "$testdir"/remoteice2.pid
 
     libdir="${testdir}/libs"
     rm -rf  "${libdir}"
@@ -772,18 +787,18 @@ zero_local_jobs_test()
 
     reset_logs remote $GXX -Wall -Werror -c testfunc.cpp -o "${testdir}/testfunc.o"
     echo Running: $GXX -Wall -Werror -c testfunc.cpp -o "${testdir}/testfunc.o"
-    ICECC_TEST_SOCKET="$testdir"/socket-localice ICECC_TEST_REMOTEBUILD=1 ICECC_PREFERRED_HOST=remoteice1 ICECC_DEBUG=debug ICECC_LOGFILE="$testdir"/icecc.log $valgrind "$prefix"/bin/icecc $GXX -Wall -Werror -c testfunc.cpp -o "${testdir}/testfunc.o" 2>"$testdir"/stderr.localice
+    ICECC_TEST_SOCKET="$testdir"/socket-localice ICECC_TEST_REMOTEBUILD=1 ICECC_PREFERRED_HOST=remoteice1 ICECC_DEBUG=debug ICECC_LOGFILE="$testdir"/icecc.log $valgrind "${icecc}" $GXX -Wall -Werror -c testfunc.cpp -o "${testdir}/testfunc.o"
 
     reset_logs remote $GXX -Wall -Werror -c testmainfunc.cpp -o "${testdir}/testmainfunc.o"
     echo Running: $GXX -Wall -Werror -c testmainfunc.cpp -o "${testdir}/testmainfunc.o"
-    ICECC_TEST_SOCKET="$testdir"/socket-localice ICECC_TEST_REMOTEBUILD=1 ICECC_PREFERRED_HOST=remoteice2 ICECC_DEBUG=debug ICECC_LOGFILE="$testdir"/icecc.log $valgrind "$prefix"/bin/icecc $GXX -Wall -Werror -c testmainfunc.cpp -o "${testdir}/testmainfunc.o" 2>"$testdir"/stderr.localice
+    ICECC_TEST_SOCKET="$testdir"/socket-localice ICECC_TEST_REMOTEBUILD=1 ICECC_PREFERRED_HOST=remoteice2 ICECC_DEBUG=debug ICECC_LOGFILE="$testdir"/icecc.log $valgrind "${icecc}" $GXX -Wall -Werror -c testmainfunc.cpp -o "${testdir}/testmainfunc.o" 2>"$testdir"/stderr.localice
 
     ar rcs "${libdir}/libtestlib1.a" "${testdir}/testmainfunc.o"
     ar rcs "${libdir}/libtestlib2.a" "${testdir}/testfunc.o"
 
     reset_logs local $GXX -Wall -Werror "-L${libdir}" "-ltestlib1" "-ltestlib2" -o "${testdir}/linkedapp"
     echo Running: $GXX -Wall -Werror "-L${libdir}" "-ltestlib1" "-ltestlib2" -o "${testdir}/linkedapp"
-    ICECC_TEST_SOCKET="$testdir"/socket-localice ICECC_TEST_REMOTEBUILD=1 ICECC_PREFERRED_HOST=localice ICECC_DEBUG=debug ICECC_LOGFILE="$testdir"/icecc.log $valgrind "$prefix"/bin/icecc $GXX -Wall -Werror "-L${libdir}" "-ltestlib1" "-ltestlib2" -o "${testdir}/linkedapp" 2>"$testdir"/stderr.remoteice
+    ICECC_TEST_SOCKET="$testdir"/socket-localice ICECC_TEST_REMOTEBUILD=1 ICECC_PREFERRED_HOST=localice ICECC_DEBUG=debug ICECC_LOGFILE="$testdir"/icecc.log $valgrind "${icecc}" $GXX -Wall -Werror "-L${libdir}" "-ltestlib1" "-ltestlib2" -o "${testdir}/linkedapp" 2>"$testdir"/stderr.remoteice
 
     "${testdir}/linkedapp" 2>>"$testdir"/stderr.log
     app_ret=$?
@@ -794,8 +809,11 @@ zero_local_jobs_test()
     fi
     rm -rf  "${libdir}"
 
-    stop_ice 1
     check_logs_for_generic_errors
+    kill_daemon localice
+    kill_daemon remoteice1
+    kill_daemon remoteice2
+    start_ice
 
     echo zero_local_jobs test successful.
     echo
@@ -978,6 +996,8 @@ icerun_test
 
 recursive_test
 
+zero_local_jobs_test
+
 if test -x $CLANGXX; then
     # There's probably not much point in repeating all tests with Clang, but at least
     # try it works (there's a different icecc-create-env run needed, and -frewrite-includes
@@ -1032,8 +1052,6 @@ fi
 reset_logs local "Closing down"
 stop_ice 1
 check_logs_for_generic_errors
-
-zero_local_jobs_test
 
 reset_logs local "Starting only daemon"
 start_only_daemon
