@@ -98,10 +98,24 @@ start_iceccd()
 {
     name=$1
     shift
-    ICECC_TEST_SOCKET="$testdir"/socket-${name} $valgrind "${iceccd}" 6 -s localhost:8767 -b "$testdir"/envs-${name} -l "$testdir"/${name}.log -N ${name}  -v -v -v "$@" &
+    ICECC_TEST_SOCKET="$testdir"/socket-${name} $valgrind "${iceccd}" -s localhost:8767 -b "$testdir"/envs-${name} -l "$testdir"/${name}.log -N ${name}  -v -v -v "$@" &
     pid=$!
     eval ${name}_pid=${pid}
     echo ${pid} > "$testdir"/${name}.pid
+}
+
+wait_for_proc_sleep()
+{
+    local wait_timeout=$1
+    shift
+    local pid_list="$@"
+    local proc_count=$#
+    local ps_state_field="state"
+    for wait_count in $(seq 1 ${wait_timeout}); do
+        local int_sleep_count=$(ps -ho ${ps_state_field} -p ${pid_list} | grep --count "S")
+        ((${int_sleep_count} == ${proc_count})) && break
+        sleep 1
+    done
 }
 
 kill_daemon()
@@ -663,7 +677,7 @@ debug_test()
     # debug tests fail when the daemon is not running in the install directory
     # Sanitizers will not give good output on error as a result
     kill_daemon localice
-    ICECC_TEST_SOCKET="$testdir"/socket-localice $valgrind "${prefix}/sbin/iceccd" 6 -s localhost:8767 -b "$testdir"/envs-localice -l "$testdir"/localice.log -N localice  -v -v -v --no-remote -m 2 &
+    ICECC_TEST_SOCKET="$testdir"/socket-localice $valgrind "${prefix}/sbin/iceccd" -s localhost:8767 -b "$testdir"/envs-localice -l "$testdir"/localice.log -N localice  -v -v -v --no-remote -m 2 &
     localice_pid=$!
     echo ${localice_pid} > "$testdir"/${localice}.pid
 
@@ -780,6 +794,8 @@ zero_local_jobs_test()
     ICECC_TEST_SOCKET="$testdir"/socket-remoteice2 $valgrind "${prefix}/sbin/iceccd" -p 10247 -s localhost:8767 -b "$testdir"/envs-remoteice2 -l "$testdir"/remoteice2.log -N remoteice2 -m 2 -v -v -v &
     remoteice2_pid=$!
     echo $remoteice2_pid > "$testdir"/remoteice2.pid
+
+    wait_for_proc_sleep 10 $localice_pid $remoteice1_pid $remoteice2_pid
 
     libdir="${testdir}/libs"
     rm -rf  "${libdir}"
